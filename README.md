@@ -131,6 +131,7 @@ node index.js
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `DEBUG` | 开启调试输出 | `false` |
+| `OPENAI_MODEL_NAME` | 使用的模型 | `z-ai/glm-4.5-air:free` |
 | `OPENAI_API_KEY` | API 密钥 | - |
 | `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` |
 

@@ -8,6 +8,8 @@ import { checkDangerous, checkFilePath } from './security.js';
 const DEBUG = process.env.DEBUG === 'true';
 const log = (...args) => DEBUG && console.log(...args);
 
+const MODEL = process.env.OPENAI_MODEL_NAME || 'z-ai/glm-4.5-air:free';
+
 const client = new OpenAI();
 
 function confirmDangerous(operation, msg) {
@@ -234,7 +236,7 @@ async function loop() {
     }
 
     let response = await client.chat.completions.create({
-      model: "z-ai/glm-4.5-air:free",
+      model: MODEL,
       messages,
       tools
     });
@@ -341,7 +343,7 @@ async function loop() {
       });
 
       response = await client.chat.completions.create({
-        model: "z-ai/glm-4.5-air:free",
+        model: MODEL,
         messages,
         tools
       });
