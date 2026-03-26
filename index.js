@@ -12,9 +12,25 @@ const MODEL = process.env.OPENAI_MODEL_NAME || 'z-ai/glm-4.5-air:free';
 
 const client = new OpenAI();
 
+function printStatus(status, message) {
+  const icons = {
+    thinking: '🤔',
+    running: '⏳',
+    done: '✅',
+    error: '❌',
+    confirm: '⚠️'
+  };
+  console.log(`[${icons[status] || '⏸️'}] ${message}`);
+}
+
 function confirmDangerous(operation, msg) {
   return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
     rl.question(`\n⚠️ 危险操作: ${msg}\n   ${operation}\n   是否确认执行? (yes/no): `, (answer) => {
+      rl.close();
       resolve(answer.trim().toLowerCase() === 'yes');
     });
   });
@@ -199,11 +215,13 @@ const tools = [
   }
 ];
 
-async function loop() {
-  rl.question(">>> ", async (input) => {
+console.log('Code121 启动成功，输入消息开始对话 (exit 退出)\n');
+
+function ask() {
+  rl.question('>>> ', async (input) => {
     const trimmed = input.trim().toLowerCase();
-    if (trimmed === "exit" || trimmed === "exit()") {
-      console.log("再见!");
+    if (trimmed === 'exit' || trimmed === 'exit()') {
+      console.log('再见!');
       rl.close();
       process.exit(0);
     }
@@ -212,51 +230,46 @@ async function loop() {
     if (userDanger.dangerous) {
       if (userDanger.level === 'critical') {
         console.log(`\n⛔ 已拦截危险操作: ${userDanger.msg}`);
-        console.log("此操作被禁止执行。\n");
-        loop();
+        console.log('此操作被禁止执行。\n');
+        ask();
         return;
       } else {
         const confirmed = await confirmDangerous(input, userDanger.msg);
         if (!confirmed) {
-          console.log("操作已取消。\n");
-          loop();
+          console.log('操作已取消。\n');
+          ask();
           return;
         }
       }
     }
 
-    log("[DEBUG] 用户输入:", input);
-    messages.push({ role: "user", content: input });
+    log('[DEBUG] 用户输入:', input);
+    messages.push({ role: 'user', content: input });
 
-    const compressionInfo = shouldCompress(messages);
-    log(`[DEBUG] 工具输出统计: ${compressionInfo.toolOutputCount} 个, 约 ${compressionInfo.estimatedTokens} tokens`);
-
-    if (compressionInfo.shouldCompress) {
-      log("[DEBUG] 触发语义压缩...");
-    }
+    printStatus('thinking', 'AI 正在思考...');
 
     let response = await client.chat.completions.create({
       model: MODEL,
       messages,
       tools
     });
-    log("[DEBUG] 原始响应:", JSON.stringify(response, null, 2));
+    log('[DEBUG] 原始响应:', JSON.stringify(response, null, 2));
 
     let msg = response.choices[0].message;
 
     while (msg.tool_calls) {
-      log("[DEBUG] 检测到工具调用");
+      log('[DEBUG] 检测到工具调用');
 
       const toolCall = msg.tool_calls[0];
-      log("[DEBUG] 函数调用:", toolCall);
       const args = JSON.parse(toolCall.function.arguments);
-      log("[DEBUG] 解析参数:", args);
-
       const toolName = toolCall.function.name;
+
+      printStatus('running', `执行工具: ${toolName}`);
+
       let result;
       let shouldSkip = false;
 
-      if (toolName === "bash") {
+      if (toolName === 'bash') {
         const cmdDanger = checkDangerous(args.command);
         if (cmdDanger.dangerous) {
           if (cmdDanger.level === 'critical') {
@@ -265,35 +278,35 @@ async function loop() {
           } else {
             const confirmed = await confirmDangerous(args.command, cmdDanger.msg);
             if (!confirmed) {
-              result = "操作已取消。";
+              result = '操作已取消。';
               shouldSkip = true;
             }
           }
         }
 
         if (!shouldSkip) {
-          log("[DEBUG] 执行命令:", args.command);
+          log('[DEBUG] 执行命令:', args.command);
           const rawResult = await runBash(args.command);
-          log("[DEBUG] 原始命令结果长度:", rawResult.length, "字符");
+          log('[DEBUG] 原始命令结果长度:', rawResult.length, '字符');
           result = smartTruncate(args.command, rawResult);
-          log("[DEBUG] 截断后长度:", result.length, "字符");
+          log('[DEBUG] 截断后长度:', result.length, '字符');
         }
-      } else if (toolName === "read_file") {
+      } else if (toolName === 'read_file') {
         const pathDanger = checkFilePath(args.path, 'read');
         if (pathDanger.dangerous) {
           const confirmed = await confirmDangerous(`读取 ${args.path}`, pathDanger.msg);
           if (!confirmed) {
-            result = "操作已取消。";
+            result = '操作已取消。';
             shouldSkip = true;
           }
         }
 
         if (!shouldSkip) {
-          log("[DEBUG] 读取文件:", args.path);
+          log('[DEBUG] 读取文件:', args.path);
           result = await runReadFile(args.path, args.offset, args.limit);
-          log("[DEBUG] 文件内容长度:", result.length, "字符");
+          log('[DEBUG] 文件内容长度:', result.length, '字符');
         }
-      } else if (toolName === "write_file") {
+      } else if (toolName === 'write_file') {
         const pathDanger = checkFilePath(args.path, 'write');
         if (pathDanger.dangerous) {
           if (pathDanger.level === 'critical') {
@@ -302,18 +315,18 @@ async function loop() {
           } else {
             const confirmed = await confirmDangerous(`写入 ${args.path}`, pathDanger.msg);
             if (!confirmed) {
-              result = "操作已取消。";
+              result = '操作已取消。';
               shouldSkip = true;
             }
           }
         }
 
         if (!shouldSkip) {
-          log("[DEBUG] 写入文件:", args.path);
+          log('[DEBUG] 写入文件:', args.path);
           result = await runWriteFile(args.path, args.content);
-          log("[DEBUG] 写入结果:", result);
+          log('[DEBUG] 写入结果:', result);
         }
-      } else if (toolName === "edit_file") {
+      } else if (toolName === 'edit_file') {
         const pathDanger = checkFilePath(args.path, args.operation);
         if (pathDanger.dangerous) {
           if (pathDanger.level === 'critical') {
@@ -322,50 +335,57 @@ async function loop() {
           } else {
             const confirmed = await confirmDangerous(`编辑 ${args.path}`, pathDanger.msg);
             if (!confirmed) {
-              result = "操作已取消。";
+              result = '操作已取消。';
               shouldSkip = true;
             }
           }
         }
 
         if (!shouldSkip) {
-          log("[DEBUG] 编辑文件:", args.path, args.operation);
+          log('[DEBUG] 编辑文件:', args.path, args.operation);
           result = await runEditFile(args.path, args.operation, args.start, args.end, args.content);
-          log("[DEBUG] 编辑结果:", result);
+          log('[DEBUG] 编辑结果:', result);
         }
+      }
+
+      if (shouldSkip) {
+        printStatus('error', '操作已取消');
+      } else {
+        printStatus('done', `工具执行完成: ${toolName}`);
       }
 
       messages.push(msg);
       messages.push({
-        role: "tool",
+        role: 'tool',
         content: result,
         tool_call_id: toolCall.id
       });
 
+      printStatus('thinking', 'AI 正在思考...');
       response = await client.chat.completions.create({
         model: MODEL,
         messages,
         tools
       });
       msg = response.choices[0].message;
-      log("[DEBUG] AI 后续响应:", msg);
+      log('[DEBUG] AI 后续响应:', msg);
     }
 
-    log("[DEBUG] 最终回复:", msg.content);
+    log('[DEBUG] 最终回复:', msg.content);
     console.log(msg.content);
     messages.push(msg);
 
     const finalCompressionInfo = shouldCompress(messages);
     if (finalCompressionInfo.shouldCompress) {
-      log("[DEBUG] 对话结束，触发语义压缩...");
+      log('[DEBUG] 对话结束，触发语义压缩...');
       const compressedMessages = compressOldOutputs(messages, 3);
       messages.length = 0;
       messages.push(...compressedMessages);
       log(`[DEBUG] 压缩后消息数: ${messages.length}`);
     }
 
-    loop();
+    ask();
   });
 }
 
-loop();
+ask();
