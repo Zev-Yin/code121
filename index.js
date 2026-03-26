@@ -98,10 +98,21 @@ function confirmDangerous(operation, msg) {
   });
 }
 
-function runBash(command) {
+function runBash(command, timeout = 60) {
   return new Promise((resolve) => {
-    exec(command, (error, stdout, stderr) => {
-      resolve(stdout + stderr);
+    const timer = setTimeout(() => {
+      resolve('[TIMEOUT] 命令超时，模型可尝试更高效的方法或调整超时时间');
+    }, timeout * 1000);
+
+    exec(command, { timeout: timeout * 1000 }, (error, stdout, stderr) => {
+      clearTimeout(timer);
+      if (error && !error.killed) {
+        resolve(`[ERROR] ${error.message}`);
+      } else if (error?.killed) {
+        resolve('[TIMEOUT] 命令超时，模型可尝试更高效的方法或调整超时时间');
+      } else {
+        resolve(stdout + stderr || '[命令执行完成，无输出]');
+      }
     });
   });
 }
@@ -212,11 +223,15 @@ const tools = [
     type: "function",
     function: {
       name: "bash",
-      description: "执行系统命令",
+      description: "执行系统命令，可选timeout参数控制超时时间",
       parameters: {
         type: "object",
         properties: {
-          command: { type: "string" }
+          command: { type: "string" },
+          timeout: {
+            type: "number",
+            description: "超时秒数，长时间任务建议设置（如编译60-300秒），默认60秒"
+          }
         },
         required: ["command"]
       }
@@ -361,8 +376,9 @@ function ask() {
         }
 
         if (!shouldSkip) {
-          log('[DEBUG] 执行命令:', args.command);
-          const rawResult = await runBash(args.command);
+          log('[DEBUG] 执行命令:', args.command, '超时:', args.timeout || 60, '秒');
+          const timeout = args.timeout ?? 60;
+          const rawResult = await runBash(args.command, timeout);
           log('[DEBUG] 原始命令结果长度:', rawResult.length, '字符');
           result = smartTruncate(args.command, rawResult);
           log('[DEBUG] 截断后长度:', result.length, '字符');

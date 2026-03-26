@@ -11,6 +11,7 @@ A local AI command-line tool developed by 南湖北一 team. Execute bash comman
 - **Smart Truncation**: Auto head-tail sampling for large outputs to save tokens
 - **Semantic Compression**: Compress historical tool outputs to save context space
 - **Security Protection**: Dangerous operation blocking/confirmation mechanism
+- **Timeout Control**: Model can customize command timeout
 
 ## Installation
 
@@ -63,7 +64,11 @@ Real-time status during execution:
 ### 1. bash - Execute System Commands
 
 ```javascript
+// Basic usage
 { command: "ls -la" }
+
+// Set timeout (seconds), recommended for long-running tasks
+{ command: "npm install", timeout: 120 }
 ```
 
 ### 2. read_file - Read File Content
@@ -114,6 +119,22 @@ Real-time status during execution:
    rm -rf /tmp
    是否确认执行? (yes/no): yes
 ```
+
+## Timeout Mechanism
+
+The `bash` tool supports the `timeout` parameter, controlled by the model based on task complexity:
+
+| Scenario | Recommended Timeout |
+|----------|---------------------|
+| Simple commands (ls, cat) | 30 seconds |
+| Package managers (npm, pip) | 60-120 seconds |
+| Build/compile | 120-300 seconds |
+| Default | 60 seconds |
+
+After timeout, the model receives `[TIMEOUT] 命令超时，模型可尝试更高效的方法或调整超时时间` and can:
+- Try faster alternative commands
+- Retry with longer timeout
+- Suggest manual operation to user
 
 ## Smart Truncation Strategy
 

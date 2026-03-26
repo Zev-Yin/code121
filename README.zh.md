@@ -1,111 +1,132 @@
-# Code121 - AI CLI Tool
+# Code121 - AI CLI 工具
 
-A local AI command-line tool developed by 南湖北一 team. Execute bash commands and manage files through natural language.
+由南湖北一团队开发的本地 AI 命令行工具，可以通过自然语言执行 bash 命令、读写文件。
 
-## Features
+## 功能特性
 
-- **Bash Execution**: Run system commands via natural language
-- **File Reading**: Read files with optional line range
-- **File Writing**: Create or overwrite files
-- **File Editing**: Replace, insert, or delete operations
-- **Smart Truncation**: Auto head-tail sampling for large outputs to save tokens
-- **Semantic Compression**: Compress historical tool outputs to save context space
-- **Security Protection**: Dangerous operation blocking/confirmation mechanism
+- **Bash 命令执行**: 通过自然语言让 AI 执行系统命令
+- **文件读取**: 支持按行范围读取文件内容
+- **文件写入**: 创建或覆盖写入文件
+- **文件编辑**: 支持替换、插入、删除操作
+- **智能截断**: 大输出自动头尾采样，避免 token 浪费
+- **语义压缩**: 历史工具输出自动压缩，节省上下文空间
+- **安全防护**: 危险操作拦截/确认机制
+- **超时控制**: 模型可自定义命令超时时间
 
-## Installation
+## 安装
 
 ```bash
 npm install
 ```
 
-## Configuration
+## 配置
 
-Set OpenAI API Key:
+设置 OpenAI API Key:
 
 ```bash
 export OPENAI_API_KEY=your_api_key
 ```
 
-Or use other compatible APIs:
+或使用其他兼容的 API:
 
 ```bash
 export OPENAI_BASE_URL=https://api.openai.com/v1
 export OPENAI_API_KEY=your_api_key
 ```
 
-## Usage
+## 使用
 
 ```bash
 node index.js
 ```
 
-### Interactive Commands
+### 交互命令
 
-| Command | Description |
-|---------|-------------|
-| `exit` or `exit()` | Exit program |
-| `DEBUG=true node index.js` | Enable debug mode |
+| 命令 | 说明 |
+|------|------|
+| `exit` 或 `exit()` | 退出程序 |
+| `DEBUG=true node index.js` | 开启调试模式 |
 
-## Status Display
+## 状态显示
 
-Real-time status during execution:
+运行时会显示实时状态：
 
-| Status | Display |
-|--------|---------|
-| AI Thinking | `[🤔] AI 正在思考...` |
-| Tool Running | `[⏳] 执行工具: bash` |
-| Tool Done | `[✅] 工具执行完成: bash` |
-| Tool Failed | `[❌] 操作已取消` |
-| Danger Confirm | `[⚠️] 危险操作确认...` |
+| 状态 | 显示 |
+|------|------|
+| AI 思考中 | `[🤔] AI 正在思考...` |
+| 工具执行中 | `[⏳] 执行工具: bash` |
+| 执行完成 | `[✅] 工具执行完成: bash` |
+| 执行失败 | `[❌] 操作已取消` |
+| 危险确认 | `[⚠️] 危险操作确认...` |
 
-## Available Tools
+## 可用工具
 
-### 1. bash - Execute System Commands
+### 1. bash - 执行系统命令
 
 ```javascript
+// 基础用法
 { command: "ls -la" }
+
+// 设置超时时间（秒），长时间任务建议设置
+{ command: "npm install", timeout: 120 }
 ```
 
-### 2. read_file - Read File Content
+### 2. read_file - 读取文件
 
 ```javascript
-// Read entire file
+// 读取整个文件
 { path: "index.js" }
 
-// Read specific line range (0-based)
+// 读取指定行范围 (0-based)
 { path: "index.js", offset: 10, limit: 50 }
 ```
 
-### 3. write_file - Write File
+### 3. write_file - 写入文件
 
 ```javascript
 { path: "test.txt", content: "Hello World" }
 ```
 
-### 4. edit_file - Edit File
+### 4. edit_file - 编辑文件
 
 ```javascript
-// Replace lines 10-20
+// 替换第 10-20 行
 { path: "index.js", operation: "replace", start: 10, end: 20, content: "..." }
 
-// Insert after line 5
+// 在第 5 行后插入
 { path: "index.js", operation: "insert", start: 5, content: "..." }
 
-// Delete line 10
+// 删除第 10 行
 { path: "index.js", operation: "delete", start: 10, end: 10 }
 ```
 
-## Security Mechanism
+## 超时机制
 
-### Risk Levels
+bash 工具支持 `timeout` 参数，由模型根据任务复杂度自主决定：
 
-| Level | Example Operations | Handling |
-|-------|-------------------|----------|
-| **critical** | `rm -rf /`, `dd`, `mkfs`, `shutdown` | Direct rejection |
-| **high** | `rm -rf` recursive delete, `DROP TABLE`, `chmod 777` | User confirmation |
-| **medium** | Delete files, modify permissions, access sensitive paths | User confirmation |
+| 场景 | 建议超时值 |
+|------|-----------|
+| 简单命令 (ls, cat) | 30 秒 |
+| 包管理器 (npm, pip) | 60-120 秒 |
+| 编译构建 | 120-300 秒 |
+| 默认值 | 60 秒 |
 
-### Blocking Example
+超时后模型会收到 `[TIMEOUT] 命令超时，模型可尝试更高效的方法或调整超时时间` 的反馈，模型可选择：
+- 尝试更快的替代命令
+- 增加超时时间重试
+- 建议用户手动操作
+
+## 安全机制
+
+### 风险等级
+
+| 等级 | 操作示例 | 处理方式 |
+|------|----------|----------|
+| **critical** | `rm -rf /`, `dd`, `mkfs`, `shutdown` | 直接拒绝 |
+| **high** | `rm -rf` 递归删除, `DROP TABLE`, `chmod 777` | 用户确认 |
+| **medium** | 删除文件, 修改权限, 访问敏感路径 | 用户确认 |
+
+### 拦截示例
 
 ```
 >>> rm -rf /tmp
@@ -115,63 +136,63 @@ Real-time status during execution:
    是否确认执行? (yes/no): yes
 ```
 
-## Smart Truncation Strategy
+## 智能截断策略
 
-Automatically selects truncation method based on command type:
+根据命令类型自动选择截断方式:
 
-| Command Type | Strategy | Limit |
-|--------------|----------|-------|
-| `ls` | Head-tail sampling | 100 + 30 lines |
-| `npm` | Tail-first | 20 + 50 lines |
-| `cat` | Head-tail sampling | 50 + 30 lines |
-| `grep` | Full return | - |
-| Error output | Preserve first | 100 + 100 lines |
+| 命令类型 | 策略 | 限制 |
+|----------|------|------|
+| `ls` | 头尾采样 | 100 + 30 行 |
+| `npm` | 尾部优先 | 20 + 50 行 |
+| `cat` | 头尾采样 | 50 + 30 行 |
+| `grep` | 完整返回 | - |
+| 错误输出 | 优先保留 | 100 + 100 行 |
 
-## Project Structure
+## 项目结构
 
 ```
 .
-├── index.js          # Main entry point
-├── truncate.js       # Smart truncation & compression module
-├── security.js       # Security detection module
-├── package.json      # Project configuration
-├── README.md         # English documentation
-└── README.zh.md     # Chinese documentation
+├── index.js          # 主程序入口
+├── truncate.js       # 智能截断与压缩模块
+├── security.js       # 安全检测模块
+├── package.json      # 项目配置
+├── README.md         # 英文说明文档
+└── README.zh.md     # 中文说明文档
 ```
 
-## Environment Variables
+## 环境变量
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEBUG` | Enable debug output | `false` |
-| `OPENAI_MODEL_NAME` | Model to use | `z-ai/glm-4.5-air:free` |
-| `OPENAI_API_KEY` | API key | - |
-| `OPENAI_BASE_URL` | API address | `https://api.openai.com/v1` |
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `DEBUG` | 开启调试输出 | `false` |
+| `OPENAI_MODEL_NAME` | 使用的模型 | `z-ai/glm-4.5-air:free` |
+| `OPENAI_API_KEY` | API 密钥 | - |
+| `OPENAI_BASE_URL` | API 地址 | `https://api.openai.com/v1` |
 
-## Example Conversation
+## 示例对话
 
 ```
->>> List files in current directory
+>>> 列出当前目录的文件
 >>> ls
 
-[AI executes ls command and returns result]
+[AI 执行 ls 命令并返回结果]
 
->>> Read first 20 lines of index.js
+>>> 读取 index.js 的前 20 行
 >>> 好的，我来读取 index.js 文件的前 20 行
 
-[AI calls read_file tool]
+[AI 调用 read_file 工具]
 
->>> Create a new file hello.txt with content "Hello World"
+>>> 创建一个新文件 hello.txt，内容是 Hello World
 >>> 好的，我来创建这个文件
 
-[AI calls write_file tool]
+[AI 调用 write_file 工具]
 ```
 
-## Dependencies
+## 依赖
 
-- `openai`: OpenAI API client
-- Node.js built-in modules: `child_process`, `fs/promises`, `readline`
+- `openai`: OpenAI API 客户端
+- Node.js 内置模块: `child_process`, `fs/promises`, `readline`
 
 ---
 
-For Chinese documentation, see [README.zh.md](./README.zh.md)
+For English documentation, see [README.md](./README.md)
