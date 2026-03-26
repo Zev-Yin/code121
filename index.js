@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import OpenAI, { APIError, AuthenticationError, APIConnectionError, RateLimitError, NotFoundError } from "openai";
 import { exec } from "child_process";
 import { readFile, writeFile } from "fs/promises";
 import readline from "readline";
@@ -11,6 +11,68 @@ const log = (...args) => DEBUG && console.log(...args);
 const MODEL = process.env.OPENAI_MODEL_NAME || 'z-ai/glm-4.5-air:free';
 
 const client = new OpenAI();
+
+function handleAPIError(error) {
+  if (error instanceof AuthenticationError) {
+    return {
+      message: 'API 认证失败，请检查 OPENAI_API_KEY 环境变量是否正确设置',
+      recoverable: false
+    };
+  }
+  
+  if (error instanceof APIConnectionError) {
+    return {
+      message: '网络连接失败，请检查网络或代理设置',
+      recoverable: true
+    };
+  }
+  
+  if (error instanceof RateLimitError) {
+    return {
+      message: 'API 调用频率超限，请稍后重试',
+      recoverable: true
+    };
+  }
+  
+  if (error instanceof NotFoundError) {
+    return {
+      message: `模型不存在: ${MODEL}，请检查 OPENAI_MODEL_NAME 环境变量`,
+      recoverable: false
+    };
+  }
+  
+  if (error instanceof APIError) {
+    const status = error.status;
+    if (status >= 500) {
+      return {
+        message: 'API 服务器错误，请稍后重试',
+        recoverable: true
+      };
+    }
+    if (status === 429) {
+      return {
+        message: 'API 请求过多，请稍后重试',
+        recoverable: true
+      };
+    }
+    return {
+      message: `API 请求失败 (${status}): ${error.message}`,
+      recoverable: status >= 400 && status < 500 && status !== 429 ? false : true
+    };
+  }
+  
+  if (error.name === 'TimeoutError' || error.message?.includes('timeout')) {
+    return {
+      message: '请求超时，请检查网络状况后重试',
+      recoverable: true
+    };
+  }
+  
+  return {
+    message: `发生错误: ${error.message || error}`,
+    recoverable: true
+  };
+}
 
 function printStatus(status, message) {
   const icons = {
@@ -248,11 +310,25 @@ function ask() {
 
     printStatus('thinking', 'AI 正在思考...');
 
-    let response = await client.chat.completions.create({
-      model: MODEL,
-      messages,
-      tools
-    });
+    let response;
+    try {
+      response = await client.chat.completions.create({
+        model: MODEL,
+        messages,
+        tools
+      });
+    } catch (error) {
+      const err = handleAPIError(error);
+      printStatus('error', err.message);
+      if (!err.recoverable) {
+        console.log('\n请修复上述问题后重新运行程序。');
+        rl.close();
+        process.exit(1);
+      }
+      console.log('请重试或输入 exit 退出。\n');
+      ask();
+      return;
+    }
     log('[DEBUG] 原始响应:', JSON.stringify(response, null, 2));
 
     let msg = response.choices[0].message;
@@ -362,12 +438,26 @@ function ask() {
       });
 
       printStatus('thinking', 'AI 正在思考...');
-      response = await client.chat.completions.create({
-        model: MODEL,
-        messages,
-        tools
-      });
-      msg = response.choices[0].message;
+      let toolResponse;
+      try {
+        toolResponse = await client.chat.completions.create({
+          model: MODEL,
+          messages,
+          tools
+        });
+      } catch (error) {
+        const err = handleAPIError(error);
+        printStatus('error', err.message);
+        if (!err.recoverable) {
+          console.log('\n请修复上述问题后重新运行程序。');
+          rl.close();
+          process.exit(1);
+        }
+        console.log('工具已执行完成，可继续输入其他命令。\n');
+        ask();
+        return;
+      }
+      msg = toolResponse.choices[0].message;
       log('[DEBUG] AI 后续响应:', msg);
     }
 
