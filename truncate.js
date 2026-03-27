@@ -132,7 +132,6 @@ function compressOldOutputs(messages, keepRecent = 3) {
   log(`[COMPRESS] 开始压缩历史工具输出...`);
 
   const toolMessages = messages.filter(m => m.role === 'tool');
-  const systemMessages = messages.filter(m => m.role !== 'tool');
 
   if (toolMessages.length <= keepRecent) {
     log(`[COMPRESS] 工具输出数量不足，无需压缩`);
@@ -140,20 +139,24 @@ function compressOldOutputs(messages, keepRecent = 3) {
   }
 
   const toCompress = toolMessages.slice(0, -keepRecent);
-  const toKeep = toolMessages.slice(-keepRecent);
+  const toCompressIds = new Set(toCompress.map(m => m.tool_call_id));
 
-  const compressed = toCompress.map((msg, idx) => {
-    const summary = summarize(msg.content);
-    log(`[COMPRESS] 压缩工具输出 ${idx + 1}/${toCompress.length}`);
-    return {
-      role: 'tool',
-      content: `[Command output compressed]\n${summary}`,
-      tool_call_id: msg.tool_call_id,
-      _compressed: true
-    };
+  let compressedCount = 0;
+  const result = messages.map(msg => {
+    if (msg.role === 'tool' && toCompressIds.has(msg.tool_call_id)) {
+      const summary = summarize(msg.content);
+      compressedCount++;
+      log(`[COMPRESS] 压缩工具输出 ${compressedCount}/${toCompress.length}`);
+      return {
+        ...msg,
+        content: `[Command output compressed]\n${summary}`,
+        _compressed: true
+      };
+    }
+    return msg;
   });
 
-  return [...systemMessages, ...compressed, ...toKeep];
+  return result;
 }
 
 function summarize(output) {
