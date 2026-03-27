@@ -1,4 +1,4 @@
-import { runBash, runReadFile, runWriteFile, runEditFile } from '../files.js';
+import { runBash, runReadFile, runWriteFile, runEditFile } from './files.js';
 
 export const bashSchema = {
   type: "function",
