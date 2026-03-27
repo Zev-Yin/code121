@@ -1,4 +1,8 @@
 import { runBash, runReadFile, runWriteFile, runEditFile } from './files.js';
+import { runGlob } from './glob.js';
+import { runGrep } from './grep.js';
+import { runTodo } from './todo.js';
+import { runSubagent } from './subagent.js';
 
 export const bashSchema = {
   type: "function",
@@ -72,6 +76,98 @@ export const editFileSchema = {
   }
 };
 
+export const globSchema = {
+  type: "function",
+  function: {
+    name: "glob",
+    description: "通过模式匹配查找文件",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "glob 模式 (如 **/*.js)" },
+        path: { type: "string", description: "搜索根目录 (可选，默认当前目录)" },
+        limit: { type: "number", description: "最大结果数 (可选，默认100)" }
+      },
+      required: ["pattern"]
+    }
+  }
+};
+
+export const grepSchema = {
+  type: "function",
+  function: {
+    name: "grep",
+    description: "在文件中搜索内容",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "搜索的正则表达式或关键词" },
+        output_mode: { 
+          type: "string", 
+          enum: ["content", "files", "count"],
+          description: "输出模式: content显示内容, files只显示文件名, count显示数量"
+        },
+        type: { type: "string", description: "文件类型过滤 (如 js, ts, py)" },
+        context: { type: "number", description: "上下文行数 (可选)" },
+        path: { type: "string", description: "搜索路径 (可选，默认当前目录)" }
+      },
+      required: ["pattern"]
+    }
+  }
+};
+
+export const todoSchema = {
+  type: "function",
+  function: {
+    name: "todo",
+    description: "任务规划工具，用于创建和管理任务计划",
+    parameters: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["set", "update", "get", "add", "clear"],
+          description: "操作类型: set设置任务, update更新状态, get查看计划, add添加任务, clear清空"
+        },
+        tasks: {
+          type: "array",
+          description: "任务列表 (仅 set 操作需要)"
+        },
+        taskId: {
+          type: "number",
+          description: "任务 ID (仅 update 操作需要)"
+        },
+        status: {
+          type: "string",
+          enum: ["pending", "done", "cancelled"],
+          description: "任务状态 (仅 update 操作需要)"
+        },
+        content: {
+          type: "string",
+          description: "任务内容 (仅 add 操作需要)"
+        }
+      },
+      required: ["operation"]
+    }
+  }
+};
+
+export const subagentSchema = {
+  type: "function",
+  function: {
+    name: "subagent",
+    description: "子代理工具，在独立上下文中执行任务",
+    parameters: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "子代理需要执行的任务" },
+        context: { type: "string", description: "传递给子代理的上下文信息" }
+      },
+      required: ["task"]
+    }
+  }
+};
+
 export const toolRegistry = {
   bash: {
     handler: runBash,
@@ -96,6 +192,32 @@ export const toolRegistry = {
     schema: editFileSchema,
     getDetail: (args) => `${args.operation} ${args.path}`,
     getOperation: (args) => args.operation
+  },
+  glob: {
+    handler: runGlob,
+    schema: globSchema,
+    getDetail: (args) => `pattern: ${args.pattern}`,
+    getOperation: () => 'read'
+  },
+  grep: {
+    handler: runGrep,
+    schema: grepSchema,
+    getDetail: (args) => `pattern: ${args.pattern}, mode: ${args.output_mode || 'content'}`,
+    getOperation: () => 'read'
+  },
+  todo: {
+    handler: runTodo,
+    schema: todoSchema,
+    getDetail: (args) => `operation: ${args.operation}`,
+    getOperation: () => 'read',
+    isAsync: true
+  },
+  subagent: {
+    handler: runSubagent,
+    schema: subagentSchema,
+    getDetail: (args) => `task: ${args.task?.substring(0, 30)}...`,
+    getOperation: () => 'read',
+    isAsync: true
   }
 };
 
