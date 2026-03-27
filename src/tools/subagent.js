@@ -1,13 +1,11 @@
 import { Agent } from '../agent.js';
-import { createProvider } from '../provider.js';
 
 export class SubAgent {
   constructor(options = {}) {
     this.task = options.task || '';
     this.context = options.context || '';
     this.maxTurns = options.maxTurns || 20;
-    this.model = options.model || 'z-ai/glm-4.5-air:free';
-    this.provider = options.provider || 'custom';
+    this.model = options.model || process.env.OPENAI_MODEL_NAME || 'gpt-4o-mini';
     this.debug = options.debug || false;
     this.result = null;
   }
@@ -19,7 +17,6 @@ export class SubAgent {
 
     const agent = new Agent({
       model: this.model,
-      provider: this.provider,
       debug: this.debug
     });
 

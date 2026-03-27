@@ -1,386 +1,179 @@
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const blessed = require('blessed');
+/**
+ * Inline compact TUI — renders below the command line, no fullscreen takeover.
+ * Uses ANSI escape codes + readline; blessed is not required.
+ */
 
-// ── Pink color palette ───────────────────────────────────────────────────────
-const C = {
-  pink:         '#ff69b4',
-  lightPink:    '#ffb6c1',
-  deepPink:     '#ff1493',
-  roseBg:       '#2d0018',
-  darkBg:       '#160010',
-  dimText:      '#cc7799',
-  white:        '#ffffff',
-  userBubble:   '#ff85c2',
-  aiBubble:     '#ffe0f0',
-  toolColor:    '#ff94d0',
-  errorColor:   '#ff6666',
-  successColor: '#aaffcc',
+import readline from 'readline';
+import { parseCommand, loadSkill, listSkills, loadConfig } from './commands.js';
+import {
+  generateSessionId, saveSession, loadSession,
+  listSessions, getLatestSession, deleteSession
+} from './session.js';
+
+// ── ANSI color helpers ────────────────────────────────────────────────────────
+const A = {
+  reset:      '\x1b[0m',
+  bold:       '\x1b[1m',
+  dim:        '\x1b[2m',
+  pink:       '\x1b[38;2;255;105;180m',
+  deepPink:   '\x1b[38;2;255;20;147m',
+  lightPink:  '\x1b[38;2;255;182;193m',
+  dimPink:    '\x1b[38;2;204;119;153m',
+  white:      '\x1b[97m',
+  green:      '\x1b[38;2;170;255;204m',
+  red:        '\x1b[38;2;255;102;102m',
+  yellow:     '\x1b[38;2;255;220;100m',
+  cyan:       '\x1b[38;2;255;148;208m',
+  bgDeepPink: '\x1b[48;2;139;0;70m',
 };
 
-// ── TUI class ────────────────────────────────────────────────────────────────
-export class TUI {
-  constructor() {
-    this.screen      = null;
-    this.chatBox     = null;
-    this.fileViewer  = null;
-    this.statusBar   = null;
-    this.inputBox    = null;
-    this._inputHistory  = [];
-    this._historyIndex  = -1;
-    this._inputBuffer   = '';
-    this._onInputCb     = null;
-    this._planMode      = false;
-    this._statusModel   = 'code121';
-    this._statusSession = null;
-  }
+const col = (c, s) => `${c}${s}${A.reset}`;
+const bold = (s)   => `${A.bold}${s}${A.reset}`;
+const dim  = (s)   => `${A.dim}${s}${A.reset}`;
 
-  init() {
-    this.screen = blessed.screen({
-      smartCSR:     true,
-      title:        'Code121',
-      fullUnicode:  true,
-      forceUnicode: true,
-    });
+function termWidth() {
+  return process.stdout.columns || 80;
+}
 
-    this._buildLayout();
-    this._bindKeys();
-    this.screen.render();
-  }
+function hr(char = '─') {
+  return col(A.dimPink, char.repeat(termWidth()));
+}
 
-  _buildLayout() {
-    const s = this.screen;
+function statusLine(model, session) {
+  const w = termWidth();
+  const left = ` ${col(A.deepPink + A.bold, '✦ Code121')}  ${col(A.pink, model)}`;
+  const right = session ? col(A.dimPink, `[${session}] `) : '';
+  // Strip ANSI for length calc
+  const visibleLeft  = `  Code121  ${model}`;
+  const visibleRight = session ? `[${session}] ` : '';
+  const pad = w - visibleLeft.length - visibleRight.length;
+  return `${A.bgDeepPink}${left}${' '.repeat(Math.max(0, pad))}${right}${A.reset}`;
+}
 
-    // ── Chat panel (left 65%) ─────────────────────────────────────────────
-    this.chatBox = blessed.box({
-      parent: s,
-      top: 0, left: 0,
-      width: '65%', height: '100%-4',
-      label: ` {bold}{${C.deepPink}-fg}✦ 对话{/${C.deepPink}-fg}{/bold} `,
-      tags: true,
-      border: { type: 'line' },
-      style: {
-        border: { fg: C.pink },
-        label:  { fg: C.pink },
-        bg:     C.darkBg,
-        fg:     C.white,
-      },
-      scrollable: true,
-      alwaysScroll: true,
-      scrollbar: {
-        ch: '▐',
-        style: { bg: C.deepPink },
-        track: { bg: C.roseBg },
-      },
-      mouse: true, keys: true,
-      wrap: true,
-      padding: { left: 1, right: 1 },
-    });
+// ── print functions ───────────────────────────────────────────────────────────
 
-    // ── File viewer (right 35%) ───────────────────────────────────────────
-    this.fileViewer = blessed.box({
-      parent: s,
-      top: 0, left: '65%',
-      width: '35%', height: '100%-4',
-      label: ` {bold}{${C.lightPink}-fg}📄 文件预览{/${C.lightPink}-fg}{/bold} `,
-      tags: true,
-      border: { type: 'line' },
-      style: {
-        border: { fg: C.pink },
-        label:  { fg: C.lightPink },
-        bg:     C.darkBg,
-        fg:     C.dimText,
-      },
-      scrollable: true,
-      alwaysScroll: true,
-      scrollbar: {
-        ch: '▐',
-        style: { bg: C.pink },
-        track: { bg: C.roseBg },
-      },
-      mouse: true, keys: true,
-      wrap: true,
-      padding: { left: 1, right: 0 },
-      content: `{${C.dimText}-fg}等待 read_file 调用...{/${C.dimText}-fg}`,
-    });
+function printSep() {
+  process.stdout.write(hr() + '\n');
+}
 
-    // ── Status bar ────────────────────────────────────────────────────────
-    this.statusBar = blessed.box({
-      parent: s,
-      bottom: 3, left: 0,
-      width: '100%', height: 1,
-      tags: true,
-      style: { bg: C.deepPink, fg: C.white, bold: true },
-      padding: { left: 1 },
-      content: ' {bold}✦ Code121{/bold} ',
-    });
+function printMsg(role, content) {
+  const ts = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const w  = termWidth();
 
-    // ── Input box ─────────────────────────────────────────────────────────
-    this.inputBox = blessed.textbox({
-      parent: s,
-      bottom: 0, left: 0,
-      width: '100%', height: 3,
-      label: ` {bold}{${C.pink}-fg}▶ 输入{/${C.pink}-fg}{/bold} `,
-      tags: true,
-      border: { type: 'line' },
-      style: {
-        border: { fg: C.pink },
-        label:  { fg: C.pink },
-        bg:     C.roseBg,
-        fg:     C.white,
-        focus:  { border: { fg: C.deepPink }, bg: C.roseBg },
-      },
-      inputOnFocus: true,
-      mouse: true, keys: true,
-    });
-
-    this.inputBox.focus();
-  }
-
-  _bindKeys() {
-    const s = this.screen;
-
-    s.key(['C-c'], () => {
-      this.destroy();
-      process.exit(0);
-    });
-
-    s.key(['pageup'], () => {
-      this.chatBox.scroll(-(this.chatBox.height - 2));
-      s.render();
-    });
-    s.key(['pagedown'], () => {
-      this.chatBox.scroll(this.chatBox.height - 2);
-      s.render();
-    });
-
-    s.key(['tab'], () => {
-      if (s.focused === this.inputBox) {
-        this.chatBox.focus();
-      } else if (s.focused === this.chatBox) {
-        this.fileViewer.focus();
-      } else {
-        this.inputBox.focus();
+  switch (role) {
+    case 'user': {
+      const header = col(A.lightPink, `你  ${ts}`);
+      process.stdout.write(`\n${' '.repeat(Math.max(0, w - 8))}${header}\n`);
+      const lines = content.split('\n');
+      for (const line of lines) {
+        process.stdout.write(col(A.pink, `  ${line}`) + '\n');
       }
-      s.render();
-    });
-
-    s.key(['up'], () => {
-      if (s.focused !== this.inputBox) return;
-      if (!this._inputHistory.length) return;
-      if (this._historyIndex === -1) {
-        this._inputBuffer = this.inputBox.getValue();
-        this._historyIndex = this._inputHistory.length - 1;
-      } else if (this._historyIndex > 0) {
-        this._historyIndex--;
-      }
-      this.inputBox.setValue(this._inputHistory[this._historyIndex]);
-      s.render();
-    });
-
-    s.key(['down'], () => {
-      if (s.focused !== this.inputBox || this._historyIndex === -1) return;
-      if (this._historyIndex < this._inputHistory.length - 1) {
-        this._historyIndex++;
-        this.inputBox.setValue(this._inputHistory[this._historyIndex]);
-      } else {
-        this._historyIndex = -1;
-        this.inputBox.setValue(this._inputBuffer);
-      }
-      s.render();
-    });
-
-    this.inputBox.key(['enter'], () => {
-      const value = this.inputBox.getValue().trim();
-      if (!value) return;
-      this._inputHistory.push(value);
-      this._historyIndex = -1;
-      this._inputBuffer = '';
-      this.inputBox.clearValue();
-      s.render();
-      this._onInputCb?.(value);
-    });
-  }
-
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  onInput(cb) { this._onInputCb = cb; }
-
-  appendMessage(role, content) {
-    const ts = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    const txt = this._esc(content);
-    let line;
-
-    switch (role) {
-      case 'user':
-        line = `{right}{bold}{${C.userBubble}-fg}你  ${ts}{/${C.userBubble}-fg}{/bold}{/right}\n`
-             + `{right}{${C.lightPink}-fg}${txt}{/${C.lightPink}-fg}{/right}`;
-        break;
-      case 'assistant':
-        line = `{bold}{${C.aiBubble}-fg}AI  ${ts}{/${C.aiBubble}-fg}{/bold}\n`
-             + `{${C.white}-fg}${txt}{/${C.white}-fg}`;
-        break;
-      case 'thinking':
-        line = `{${C.dimText}-fg}🤔 AI 正在思考...{/${C.dimText}-fg}`;
-        break;
-      case 'tool_start':
-        line = `{${C.toolColor}-fg}⏳ ${txt}{/${C.toolColor}-fg}`;
-        break;
-      case 'tool_done':
-        line = `{${C.successColor}-fg}✅ ${txt}{/${C.successColor}-fg}`;
-        break;
-      case 'tool_error':
-        line = `{${C.errorColor}-fg}❌ ${txt}{/${C.errorColor}-fg}`;
-        break;
-      case 'system':
-        line = `{${C.dimText}-fg}── ${txt} ──{/${C.dimText}-fg}`;
-        break;
-      default:
-        line = `{${C.dimText}-fg}${txt}{/${C.dimText}-fg}`;
+      break;
     }
-
-    this.chatBox.pushLine(line);
-    this.chatBox.pushLine('');
-    this.chatBox.setScrollPerc(100);
-    this.screen.render();
-  }
-
-  setStatus(text) {
-    const model   = this._statusModel || 'code121';
-    const session = this._statusSession ? `  [${this._esc(this._statusSession)}]` : '';
-    const extra   = text ? `  {bold}${this._esc(text)}{/bold}` : '';
-    this.statusBar.setContent(` {bold}✦ Code121{/bold}  ${this._esc(model)}${session}${extra} `);
-    this.screen.render();
-  }
-
-  setStatusMeta(model, sessionId) {
-    this._statusModel   = model;
-    this._statusSession = sessionId;
-    this.setStatus('');
-  }
-
-  setFileContent(filePath, content) {
-    this.fileViewer.setLabel(
-      ` {bold}{${C.lightPink}-fg}📄 ${this._esc(filePath)}{/${C.lightPink}-fg}{/bold} `
-    );
-    this.fileViewer.setContent(`{${C.white}-fg}${this._esc(content)}{/${C.white}-fg}`);
-    this.fileViewer.setScrollPerc(0);
-    this.screen.render();
-  }
-
-  showConfirm(operation, msg, cb) {
-    const dialog = blessed.question({
-      parent: this.screen,
-      top: 'center', left: 'center',
-      width: '60%', height: 8,
-      label: ` {bold}{${C.deepPink}-fg}⚠️  危险操作确认{/${C.deepPink}-fg}{/bold} `,
-      tags: true,
-      border: { type: 'line' },
-      style: { border: { fg: C.deepPink }, bg: C.roseBg, fg: C.white },
-    });
-    dialog.ask(
-      `{${C.errorColor}-fg}${this._esc(msg)}{/${C.errorColor}-fg}\n`
-      + `{${C.dimText}-fg}${this._esc(operation)}{/${C.dimText}-fg}\n\n确认执行? (y/n)`,
-      (_err, value) => cb(value === true || value === 'y' || value === 'yes')
-    );
-  }
-
-  focusInput() {
-    this.inputBox.focus();
-    this.screen.render();
-  }
-
-  destroy() {
-    try { this.screen.destroy(); } catch (_) {}
-  }
-
-  _esc(str) {
-    if (!str) return '';
-    return String(str).replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+    case 'assistant': {
+      const header = bold(col(A.lightPink, `AI  ${ts}`));
+      process.stdout.write(`\n${header}\n`);
+      const lines = content.split('\n');
+      for (const line of lines) {
+        process.stdout.write(col(A.white, `  ${line}`) + '\n');
+      }
+      break;
+    }
+    case 'thinking':
+      process.stdout.write(col(A.dimPink, `  🤔 AI 正在思考...\n`));
+      break;
+    case 'tool_start':
+      process.stdout.write(col(A.cyan, `  ⏳ ${content}\n`));
+      break;
+    case 'tool_done':
+      process.stdout.write(col(A.green, `  ✅ ${content}\n`));
+      break;
+    case 'tool_error':
+      process.stdout.write(col(A.red, `  ❌ ${content}\n`));
+      break;
+    case 'system':
+      process.stdout.write(col(A.dimPink, `  ── ${content} ──\n`));
+      break;
+    default:
+      process.stdout.write(dim(`  ${content}\n`));
   }
 }
 
-// ── createTuiUI ──────────────────────────────────────────────────────────────
-// Same surface as createUI() in ui.js – returns { start }
+// ── createTuiUI ───────────────────────────────────────────────────────────────
 
 export function createTuiUI(agent) {
-  const tui = new TUI();
-  tui.init();
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  let planMode = false;
+  let model    = agent.model;
+  let session  = null;
+
+  function redrawStatus() {
+    process.stdout.write('\n' + statusLine(model, session) + '\n');
+  }
+
+  function prompt() {
+    redrawStatus();
+    return new Promise(resolve => rl.question(col(A.deepPink, '>>> '), resolve));
+  }
 
   const callbacks = {
-    onThinking: () => tui.appendMessage('thinking', ''),
-    onToolStart: (toolName, detail) => {
-      tui.appendMessage('tool_start', `执行工具: ${toolName}  ${detail || ''}`);
-      tui.setStatus(`⏳ ${toolName} 运行中...`);
-    },
-    onToolEnd: (toolName, status) => {
-      if (status === 'error') {
-        tui.appendMessage('tool_error', `${toolName} 已取消`);
-      } else {
-        tui.appendMessage('tool_done', `${toolName} 完成`);
-      }
-      tui.setStatus('');
-    },
-    onResponse: (content) => {
-      tui.appendMessage('assistant', content);
-      tui.setStatus('');
-    },
-    onError: (error) => {
-      tui.appendMessage('tool_error', error.message);
-      tui.setStatus('');
-    },
+    onThinking:  ()                 => printMsg('thinking', ''),
+    onToolStart: (name, detail)     => printMsg('tool_start', `${name}  ${detail || ''}`),
+    onToolEnd:   (name, status)     => printMsg(status === 'error' ? 'tool_error' : 'tool_done',
+                                               `${name} ${status === 'error' ? '失败' : '完成'}`),
+    onResponse:  (content)          => printMsg('assistant', content),
+    onError:     (err)              => printMsg('tool_error', err.message),
   };
 
   async function handleCommand(input) {
-    const { parseCommand, loadSkill, listSkills } = await import('./commands.js');
     const result = await parseCommand(input);
+    const projectDir = process.cwd();
     if (!result) return null;
 
     if (result.type === 'exit') {
-      tui.appendMessage('system', '正在保存会话并退出...');
-      const { generateSessionId, saveSession } = await import('./session.js');
-      const sessionId = generateSessionId();
-      await saveSession(process.cwd(), sessionId, agent.getMessages());
-      setTimeout(() => { tui.destroy(); process.exit(0); }, 400);
-      return { type: 'handled' };
+      printMsg('system', '正在保存会话并退出...');
+      const sid = generateSessionId();
+      await saveSession(projectDir, sid, agent.getMessages());
+      printMsg('system', `会话已保存: ${sid}`);
+      rl.close();
+      process.exit(0);
     }
 
     if (result.type === 'help') {
       const skills = await listSkills();
-      const skillLine = skills.length
-        ? '技能: ' + skills.map(s => `/${s.name}`).join('  ')
-        : '(无自定义技能)';
-      tui.appendMessage('system',
-        '内置命令: /exit /help /clear /debug /model /plan /apply /sessions /resume /save /new\n'
-        + skillLine + '\n'
-        + 'Tab 切换焦点  PageUp/Down 滚动对话  Ctrl+C 退出'
-      );
+      printSep();
+      printMsg('system', '内置命令: /exit /help /clear /debug /model /plan /sessions /resume /save /new');
+      if (skills.length) {
+        printMsg('system', '技能: ' + skills.map(s => `/${s.name}`).join('  '));
+      }
+      printMsg('system', 'Ctrl+C 退出');
+      printSep();
       return { type: 'handled' };
     }
 
     if (result.type === 'clear') {
       agent.setMessages([{ role: 'system', content: '你是一个可以调用bash工具的AI' }]);
-      tui.appendMessage('system', '对话历史已清空');
+      printMsg('system', '对话历史已清空');
       return { type: 'handled' };
     }
 
     if (result.type === 'debug') {
       agent.debug = !agent.debug;
-      tui.appendMessage('system', `调试模式: ${agent.debug ? '开启' : '关闭'}`);
+      printMsg('system', `调试模式: ${agent.debug ? '开启' : '关闭'}`);
       return { type: 'handled' };
     }
 
     if (result.type === 'model') {
       agent.setModel(result.value);
-      tui.setStatusMeta(result.value, null);
-      tui.appendMessage('system', `模型已切换: ${result.value}`);
+      model = result.value;
+      printMsg('system', `模型已切换: ${model}`);
       return { type: 'handled' };
     }
 
     if (result.type === 'plan') {
-      tui._planMode = result.value;
-      tui.appendMessage('system', result.value ? '已进入规划模式（写操作已锁定）' : '已退出规划模式');
-      if (result.value) {
+      planMode = result.value;
+      printMsg('system', planMode ? '已进入规划模式（写操作已锁定）' : '已退出规划模式');
+      if (planMode) {
         const skill = await loadSkill('plan');
         if (skill) agent.messages.push({ role: 'user', content: skill.content });
       }
@@ -391,149 +184,116 @@ export function createTuiUI(agent) {
       const skill = await loadSkill(result.name);
       if (skill) {
         agent.messages.push({ role: 'user', content: skill.content });
-        tui.appendMessage('system', `已加载技能: ${result.name}`);
+        printMsg('system', `已加载技能: ${result.name}`);
       } else {
-        tui.appendMessage('tool_error', `未找到技能: ${result.name}`);
+        printMsg('tool_error', `未找到技能: ${result.name}`);
       }
       return { type: 'handled' };
     }
 
     if (result.type === 'error') {
-      tui.appendMessage('tool_error', result.message);
+      printMsg('tool_error', result.message);
       return { type: 'handled' };
     }
 
     if (result.type === 'sessions') {
-      const { listSessions } = await import('./session.js');
-      const sessions = await listSessions(process.cwd());
+      const sessions = await listSessions(projectDir);
       if (!sessions.length) {
-        tui.appendMessage('system', '暂无会话记录');
+        printMsg('system', '暂无会话记录');
       } else {
-        tui.appendMessage('system',
-          '最近会话:\n' + sessions.map(s => `${s.id}  (${s.messageCount} 条, ${s.savedAt})`).join('\n')
-        );
+        printMsg('system', '最近会话:\n' +
+          sessions.map(s => `    ${s.id}  (${s.messageCount} 条, ${s.savedAt})`).join('\n'));
       }
       return { type: 'handled' };
     }
 
     if (result.type === 'resume') {
-      const { loadSession } = await import('./session.js');
-      const messages = await loadSession(process.cwd(), result.value);
+      const messages = await loadSession(projectDir, result.value);
       if (messages) {
         agent.setMessages(messages);
-        tui.setStatusMeta(agent.model, result.value);
-        tui.appendMessage('system', `已恢复会话: ${result.value}`);
-        _updateFileViewer(messages);
+        session = result.value;
+        printMsg('system', `已恢复会话: ${result.value}`);
       } else {
-        tui.appendMessage('tool_error', `未找到会话: ${result.value}`);
+        printMsg('tool_error', `未找到会话: ${result.value}`);
       }
       return { type: 'handled' };
     }
 
     if (result.type === 'save') {
-      const { generateSessionId, saveSession } = await import('./session.js');
-      const sessionId = generateSessionId();
-      const saved = await saveSession(process.cwd(), sessionId, agent.getMessages());
-      tui.appendMessage('system', saved ? `会话已保存: ${sessionId}` : '保存失败');
+      const sid = generateSessionId();
+      const saved = await saveSession(projectDir, sid, agent.getMessages());
+      printMsg('system', saved ? `会话已保存: ${sid}` : '保存失败');
       return { type: 'handled' };
     }
 
     if (result.type === 'new') {
       agent.setMessages([{ role: 'system', content: '你是一个可以调用bash工具的AI' }]);
-      tui.appendMessage('system', '已开始新会话');
+      session = null;
+      printMsg('system', '已开始新会话');
       return { type: 'handled' };
     }
 
     return null;
   }
 
-  function _updateFileViewer(messages) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role !== 'tool' || !msg.content || msg._compressed) continue;
-      for (let j = i - 1; j >= 0; j--) {
-        const aMsg = messages[j];
-        if (aMsg.role === 'assistant' && aMsg.tool_calls) {
-          const tc = aMsg.tool_calls.find(t => t.id === msg.tool_call_id);
-          if (tc && tc.function.name === 'read_file') {
-            const args = JSON.parse(tc.function.arguments);
-            tui.setFileContent(args.path, msg.content);
-            return;
-          }
-        }
-      }
-    }
-  }
-
   async function start() {
-    const { loadConfig } = await import('./commands.js');
-    const { generateSessionId, saveSession, getLatestSession } = await import('./session.js');
+    const config = await loadConfig();
     const projectDir = process.cwd();
 
-    const config = await loadConfig();
     if (config?.systemPrompt) agent.messages[0].content = config.systemPrompt;
-    if (config?.model) agent.setModel(config.model);
+    if (config?.model) { agent.setModel(config.model); model = config.model; }
 
-    tui.setStatusMeta(agent.model, null);
-    tui.appendMessage('system', 'Code121 已启动  /help 查看命令  Tab 切换焦点  Ctrl+C 退出');
+    printSep();
+    printMsg('system', 'Code121 启动  /help 查看命令  Ctrl+C 退出');
 
     const latestSession = await getLatestSession(projectDir);
     if (latestSession) {
-      tui.appendMessage('system', `发现最近会话: ${latestSession}   使用 /resume ${latestSession} 恢复`);
+      printMsg('system', `发现最近会话: ${latestSession}   使用 /resume ${latestSession} 恢复`);
     }
+    printSep();
 
-    tui.focusInput();
-
-    tui.onInput(async (input) => {
-      tui.appendMessage('user', input);
+    while (true) {
+      const input = await prompt();
+      if (!input.trim()) continue;
 
       const cmdResult = await handleCommand(input);
-      if (cmdResult?.type === 'handled') {
-        tui.focusInput();
-        return;
-      }
+      if (cmdResult?.type === 'handled') continue;
 
-      // Plan mode guard
-      if (tui._planMode) {
+      if (planMode) {
         const forbidden =
           ['write_file', 'edit_file', 'bash'].some(t => input.toLowerCase().includes(t)) ||
           [/write_file/i, /edit_file/i, /rm\s+-rf/i, />\s*\//i].some(p => p.test(input));
         if (forbidden) {
-          tui.appendMessage('system', '⚠️ 规划模式下禁止写操作');
-          tui.focusInput();
-          return;
+          printMsg('system', '⚠️ 规划模式下禁止写操作');
+          continue;
         }
       }
 
-      tui.setStatus('🤔 思考中...');
+      printMsg('user', input);
+
       const result = await agent.sendMessage(input, callbacks);
 
-      if (result.type === 'error') {
-        tui.appendMessage('tool_error', result.message);
-        tui.setStatus('');
-      } else if (result.type === 'confirm') {
-        tui.showConfirm(result.operation, result.message, async (confirmed) => {
-          if (confirmed) {
-            const cr = await agent.confirmOperation(result.operation, result.message);
-            if (cr.type === 'response') tui.appendMessage('assistant', cr.content);
-          } else {
-            tui.appendMessage('system', '操作已取消');
-          }
-          tui.focusInput();
-        });
-        return;
-      } else if (result.type === 'exit') {
-        const sessionId = generateSessionId();
-        await saveSession(projectDir, sessionId, agent.getMessages());
-        tui.appendMessage('system', `会话已保存: ${sessionId}`);
-        setTimeout(() => { tui.destroy(); process.exit(0); }, 400);
-        return;
+      if (result.type === 'exit') {
+        const sid = generateSessionId();
+        await saveSession(projectDir, sid, agent.getMessages());
+        printMsg('system', `会话已保存: ${sid}`);
+        rl.close();
+        process.exit(0);
       }
 
-      _updateFileViewer(agent.getMessages());
-      tui.focusInput();
-    });
+      if (result.type === 'confirm') {
+        const answer = await new Promise(resolve =>
+          rl.question(col(A.yellow, `\n⚠️  ${result.message}\n   ${result.operation}\n   确认执行? (yes/no): `), resolve)
+        );
+        if (answer.trim().toLowerCase() === 'yes') {
+          const cr = await agent.confirmOperation(result.operation, result.message);
+          if (cr.type === 'response') printMsg('assistant', cr.content);
+        } else {
+          printMsg('system', '操作已取消');
+        }
+      }
+    }
   }
 
-  return { start, tui, callbacks };
+  return { start, rl, callbacks };
 }

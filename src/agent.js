@@ -1,18 +1,13 @@
 import { checkDangerous, checkFilePath } from '../security.js';
 import { compressOldOutputs, shouldCompress, smartTruncate } from '../truncate.js';
 import { toolSchemas, getToolHandler, getToolDetail, getToolOperation } from './tools/index.js';
-import { createProvider, getCapabilities, detectProvider } from './provider.js';
+import { createProvider } from './provider.js';
 
 export class Agent {
   constructor(options = {}) {
-    this.model = options.model || process.env.OPENAI_MODEL_NAME || 'z-ai/glm-4.5-air:free';
+    this.model = options.model || process.env.OPENAI_MODEL_NAME || 'gpt-4o-mini';
     this.debug = options.debug || process.env.DEBUG === 'true';
-    this.provider = options.provider || detectProvider(this.model);
-    this.client = createProvider({
-      model: this.model,
-      provider: this.provider
-    });
-    this.caps = getCapabilities(this.model);
+    this.client = createProvider();
     this.messages = [
       { role: "system", content: "你是一个可以调用bash工具的AI" }
     ];
@@ -46,7 +41,6 @@ export class Agent {
     } else if (toolName === 'subagent') {
       const subResult = await handler(args.task, args.context, {
         model: this.model,
-        provider: this.provider,
         debug: this.debug
       });
       return subResult.success ? subResult.content : `子代理执行失败: ${subResult.content}`;
@@ -225,19 +219,9 @@ export class Agent {
 
   setModel(model) {
     this.model = model;
-    this.provider = detectProvider(model);
-    this.caps = getCapabilities(model);
-    this.client = createProvider({
-      model: this.model,
-      provider: this.provider
-    });
   }
 
   getProvider() {
-    return this.provider;
-  }
-
-  getCapabilities() {
-    return this.caps;
+    return process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
   }
 }
